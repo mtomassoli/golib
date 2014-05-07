@@ -1,0 +1,4 @@
+name: golib
+version: 0.1.0
+author: Massimiliano Tomassoli <kiuhnm03@yahoo.it>
+description: Dart library for go-like concurrency (goroutines, channels, and synchronous operations).
