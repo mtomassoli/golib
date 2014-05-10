@@ -15,7 +15,7 @@ populateChan(Channel<int> ch, int numMessages) {
   go([() {
     int i = 0;
     goWhile(() => i < numMessages, [() {
-      ch.push(i);
+      ch.send(i);
       i++;
     }]);                                              }, () {
     ch.close();

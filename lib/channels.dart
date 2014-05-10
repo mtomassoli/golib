@@ -10,8 +10,8 @@ class _ChannelOp {
   int _operation;
   
   // Operation types.
-  static const int push = 0;
-  static const int pop = 1;
+  static const int send = 0;
+  static const int recv = 1;
   
   _ChannelOp(this._channel, this._operation);
 
@@ -33,8 +33,8 @@ abstract class ROChannel<E> {
   /// Returns the capacity of the queue.
   int get cap;
   
-  int get numBlockedPushes;
-  int get numBlockedPops;
+  int get numBlockedSends;
+  int get numBlockedRecvs;
 
   bool get isOpen;
   bool get isClosed;
@@ -42,18 +42,18 @@ abstract class ROChannel<E> {
   /// Detaches the stream [stream] from this channel.
   void detach(Stream stream);
 
-  /// Returns true if and only if calling a [pop] would block.
-  bool get popWillBlock;
+  /// Returns true if and only if calling [recv] would block.
+  bool get recvWillBlock;
   
-  /// Returns true if and only if calling a [pop] would NOT block.
-  bool get popReady;
+  /// Returns true if and only if calling [recv] would NOT block.
+  bool get recvReady;
 
-  /// Pops the next value from this channel.
+  /// Receives the next value from this channel.
   /// 
-  /// If [doNotBlock] is true and [pop] needs to block to complete, it fails
+  /// If [doNotBlock] is true and [recv] needs to block to complete, it fails
   /// and returns false.
-  /// If this channel is closed, [pop] returns [channelClosed].
-  GoFuture pop([bool doNotBlock = false]);
+  /// If this channel is closed, [recv] returns [channelClosed].
+  GoFuture recv([bool doNotBlock = false]);
 }
 
 /// Write Only Channel.
@@ -64,40 +64,40 @@ abstract class WOChannel<E> {
   /// Returns the capacity of the queue.
   int get cap;
   
-  int get numBlockedPushes;
-  int get numBlockedPops;
+  int get numBlockedSends;
+  int get numBlockedRecvs;
 
   bool get isOpen;
   bool get isClosed;
   
   /// Attaches the stream [stream] to this channel.
   /// 
-  /// Note that data received from the stream will be pushed 
+  /// Note that data received from the stream will be sent on this channel.
   void attach(Stream stream);
   
   /// Detaches the stream [stream] from this channel.
   void detach(Stream stream);
 
-  /// When a channel is closed no more data can be [push]ed into it and any [pop]
+  /// When a channel is closed no more data can be sent on it and any [recv]
   /// will return [channelClosed].
   void close();
 
-  /// Returns true if and only if calling a [push] would block.
-  bool get pushWillBlock;
+  /// Returns true if and only if calling [send] would block.
+  bool get sendWillBlock;
 
-  /// Returns true if and only if calling a [push] would NOT block.
-  bool get pushReady;
+  /// Returns true if and only if calling [send] would NOT block.
+  bool get sendReady;
   
-  /// Pushes [newVal] into this channel.
+  /// Sends [newVal] on this channel.
   /// 
-  /// If [doNotBlock] is true and [push] needs to block to complete, it fails
+  /// If [doNotBlock] is true and [send] needs to block to complete, it fails
   /// and returns false.
-  /// Note: if you try to push into a closed channel, [push] throws.
-  bool push(E newVal, [bool doNotBlock = false]);
+  /// Note: if you try to send on a closed channel, [send] throws.
+  bool send(E newVal, [bool doNotBlock = false]);
 }
 
 /// When a channel is [attach]ed to a stream (with [reportErrors] equal to true)
-/// and that stream sends an error, [pop] returns the error wrapped in [StreamError].
+/// and that stream sends an error, [recv] returns the error wrapped in [StreamError].
 class StreamError {
   var error;
   
@@ -108,12 +108,12 @@ class StreamError {
 class Channel<E> implements ROChannel<E>, WOChannel<E> {
   int _queueSize;
   Queue<E> _queue;
-  Queue<Completer> _pushCompleters;
-  Queue<Completer> _popCompleters;
-  Queue<E> _pushValues;
+  Queue<Completer> _sendCompleters;
+  Queue<Completer> _recvCompleters;
+  Queue<E> _sendValues;
   bool _open;
-  Completer _pushFutureCompleter;
-  Completer _popFutureCompleter;
+  Completer _sendFutureCompleter;
+  Completer _recvFutureCompleter;
   Map<Stream, StreamSubscription> _streamsMap;
   bool _closeWhenStreamsDone;
   
@@ -122,12 +122,12 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
   void clear(int dim) {
     _queue = new Queue();
     _queueSize = dim;
-    _pushCompleters = new Queue<Completer>();
-    _popCompleters = new Queue<Completer>();
-    _pushValues = new Queue<E>();
+    _sendCompleters = new Queue<Completer>();
+    _recvCompleters = new Queue<Completer>();
+    _sendValues = new Queue<E>();
     _open = true;
-    _pushFutureCompleter = null;
-    _popFutureCompleter = null;
+    _sendFutureCompleter = null;
+    _recvFutureCompleter = null;
     _streamsMap = null;
     _closeWhenStreamsDone = true;
   }
@@ -136,8 +136,8 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
   /// 
   /// [dim] can be [Channel.infinite].
   /// Think of a channel as a queue.
-  /// A [push] on a channel blocks if and only if the channel is full.
-  /// A [pop] on a channel blocks if and only if the channel is empty.
+  /// [send] on a channel blocks if and only if the channel is full.
+  /// [recv] on a channel blocks if and only if the channel is empty.
   Channel([int dim = 0]) {
     clear(dim);
   }
@@ -164,8 +164,8 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
   /// Returns the capacity of the queue.
   int get cap => _queueSize;
   
-  int get numBlockedPushes => _pushCompleters.length;
-  int get numBlockedPops => _popCompleters.length;
+  int get numBlockedSends => _sendCompleters.length;
+  int get numBlockedRecvs => _recvCompleters.length;
   
   bool get isOpen => _open;
   bool get isClosed => !_open;
@@ -177,7 +177,7 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
   /// If [detachOnError] is true, if and when [stream] sends an error, [stream]
   /// is detached from the channel.
   /// If [reportErrors] is false, the errors sent by [stream] are ignored and
-  /// not pushed onto the channel. Errors are wrapped in the object [StreamError]
+  /// not sent on the channel. Errors are wrapped in the object [StreamError]
   /// so that you can spot them.
   void attach(Stream stream, {bool detachOnError: false, bool reportErrors: false}) {
     if (isClosed)
@@ -189,14 +189,14 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
       return;               // can't attach a stream more than once
     
     StreamSubscription subs = stream.listen((data) {
-      // data is pushed onto the channel only if the operation is non-blocking
+      // data is sent on the channel only if the operation is non-blocking
       // so data may be lost.
       if (isOpen)
-        push(data, true);               // doesn't block
+        send(data, true);               // doesn't block
     },
     onError: (error) {
       if (isOpen && reportErrors)
-        push(new StreamError(error));
+        send(new StreamError(error));
       if (detachOnError) {
         detach(stream);
         if (_closeWhenStreamsDone && _streamsMap.isEmpty) // all streams detached
@@ -240,7 +240,7 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
     }
   }
 
-  /// When a channel is closed no more data can be [push]ed onto it and any [pop]
+  /// When a channel is closed no more data can be sent on it and any [recv]
   /// will return [channelClosed].
   /// When a channel is closed, all streams are detached from it.
   void close() {
@@ -252,140 +252,140 @@ class Channel<E> implements ROChannel<E>, WOChannel<E> {
 
     _open = false;
 
-    if (_popCompleters.isNotEmpty) {
-      // Unblock all the pop waiting. 
+    if (_recvCompleters.isNotEmpty) {
+      // Unblock all the recv waiting. 
       assert(_queue.isEmpty);
-      assert(_pushCompleters.isEmpty);
-      _popCompleters.forEach((Completer c) { c.complete(channelClosed); });
-      _popCompleters.clear();
+      assert(_sendCompleters.isEmpty);
+      _recvCompleters.forEach((Completer c) { c.complete(channelClosed); });
+      _recvCompleters.clear();
     }
 
     _signalStatusChange();
   }
 
-  /// Returns true if and only if calling a [push] would block.
-  bool get pushWillBlock => _open && _queue.length == _queueSize && _popCompleters.isEmpty;
+  /// Returns true if and only if calling [send] would block.
+  bool get sendWillBlock => _open && _queue.length == _queueSize && _recvCompleters.isEmpty;
 
-  /// Returns true if and only if calling a [pop] would block.
-  bool get popWillBlock => _open && _queue.isEmpty && _pushCompleters.isEmpty;
+  /// Returns true if and only if calling [recv] would block.
+  bool get recvWillBlock => _open && _queue.isEmpty && _sendCompleters.isEmpty;
   
-  /// Returns true if and only if calling a [push] would NOT block.
-  bool get pushReady => !pushWillBlock;
+  /// Returns true if and only if calling [send] would NOT block.
+  bool get sendReady => !sendWillBlock;
   
-  /// Returns true if and only if calling a [pop] would NOT block.
-  bool get popReady => !popWillBlock;
+  /// Returns true if and only if calling [recv] would NOT block.
+  bool get recvReady => !recvWillBlock;
 
-  /// Returns a future which completes when the push becomes non-blocking.
-  /// If [pushReady] is true, returns null.
-  Future _getPushFuture() {
-    if (pushReady)
+  /// Returns a future which completes when the send becomes non-blocking.
+  /// If [sendReady] is true, returns null.
+  Future _getSendFuture() {
+    if (sendReady)
       return null;
-    if (_pushFutureCompleter == null)
-      _pushFutureCompleter = new Completer();
-    return _pushFutureCompleter.future;
+    if (_sendFutureCompleter == null)
+      _sendFutureCompleter = new Completer();
+    return _sendFutureCompleter.future;
   }
   
-  /// Returns a future which completes when the pop becomes non-blocking.
-  /// If [popReady] is true, returns null.
-  Future _getPopFuture() {
-    if (popReady)
+  /// Returns a future which completes when [recv] becomes non-blocking.
+  /// If [recvReady] is true, returns null.
+  Future _getRecvFuture() {
+    if (recvReady)
       return null;
-    if (_popFutureCompleter == null)
-      _popFutureCompleter = new Completer();
-    return _popFutureCompleter.future;
+    if (_recvFutureCompleter == null)
+      _recvFutureCompleter = new Completer();
+    return _recvFutureCompleter.future;
   }
 
-  /// If some users called [_getPushFuture()] or [_getPopFuture()] and if a [push] or
-  /// [pop] became non-blocking, [_signalStatusChange] signals this fact to the users.
+  /// If some users called [_getSendFuture()] or [_getRecvFuture()] and if [send] or
+  /// [recv] became non-blocking, [_signalStatusChange] signals this fact to the users.
   void _signalStatusChange() {
-    if (pushReady && _pushFutureCompleter != null) {
-        _pushFutureCompleter.complete(0);
-        _pushFutureCompleter = null;
+    if (sendReady && _sendFutureCompleter != null) {
+        _sendFutureCompleter.complete(0);
+        _sendFutureCompleter = null;
     }
-    if (popReady && _popFutureCompleter != null) {
-      _popFutureCompleter.complete(0);
-      _popFutureCompleter = null;
+    if (recvReady && _recvFutureCompleter != null) {
+      _recvFutureCompleter.complete(0);
+      _recvFutureCompleter = null;
     }
   }
   
-  /// Pushes [newVal] into this channel.
+  /// Sends [newVal] on this channel.
   /// 
-  /// If [doNotBlock] is true and [push] needs to block to complete, it fails
+  /// If [doNotBlock] is true and [send] needs to block to complete, it fails
   /// and returns false.
-  /// Note: if you try to push into a closed channel, [push] throws.
-  bool push(E newVal, [bool doNotBlock = false]) {
+  /// Note: if you try to send on a closed channel, [send] throws.
+  bool send(E newVal, [bool doNotBlock = false]) {
     if (!_open)
-      throw new UsageException("You can't push values into a closed channel!");
+      throw new UsageException("You can't send values on a closed channel!");
     
     if (_selectedOpIdx > 0)
       return false;             // don't execute this op (also see goCase)
       
     if (_gatherChOps)
-      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.push));
-    else if (_popCompleters.isNotEmpty) {                 // unblock a pop
+      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.send));
+    else if (_recvCompleters.isNotEmpty) {                 // unblock a recv
       assert(_queue.isEmpty);
-      assert(_pushCompleters.isEmpty);
-      _popCompleters.removeFirst().complete(newVal);
+      assert(_sendCompleters.isEmpty);
+      _recvCompleters.removeFirst().complete(newVal);
     }
-    else if (_queue.length != _queueSize) {               // this push is non-blocking
-      assert(_pushCompleters.isEmpty);
+    else if (_queue.length != _queueSize) {               // this send is non-blocking
+      assert(_sendCompleters.isEmpty);
       _queue.addLast(newVal);
     }
-    else {                                                // this push is blocking
+    else {                                                // this send is blocking
       if (doNotBlock)
         return false;
       Completer c = new Completer();
-      _pushCompleters.addLast(c);
-      _pushValues.addLast(newVal);
+      _sendCompleters.addLast(c);
+      _sendValues.addLast(newVal);
       _wait(c.future);
     }
     _signalStatusChange();
     return true;
   }
 
-  /// Pops the next value from this channel.
+  /// Receives the next value from this channel.
   /// 
-  /// If [doNotBlock] is true and [pop] needs to block to complete, it fails
+  /// If [doNotBlock] is true and [recv] needs to block to complete, it fails
   /// and returns false.
-  /// If this channel is closed, [pop] returns [channelClosed].
-  GoFuture<E> pop([bool doNotBlock = false]) {
+  /// If this channel is closed, [recv] returns [channelClosed].
+  GoFuture<E> recv([bool doNotBlock = false]) {
     GoFuture<E> mf;
     
     if (_selectedOpIdx > 0)
       return null;              // don't execute this op (also see goCase)
 
     if (_gatherChOps) {
-      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.pop));
+      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.recv));
       return null;
     }
     
-    if (_queue.isNotEmpty) {                   // this pop is non-blocking
+    if (_queue.isNotEmpty) {                   // this recv is non-blocking
       mf = new GoFuture(null);
       mf._setValue(_queue.removeFirst());
 
-      // If _pushCompleters is not empty, the _queue was full but now it has a free slot
-      // so we must unblock a push and insert the associated value into the _queue.
-      if (_pushCompleters.isNotEmpty) {
+      // If _sendCompleters is not empty, the _queue was full but now it has a free slot
+      // so we must unblock a send and insert the associated value into the _queue.
+      if (_sendCompleters.isNotEmpty) {
         assert(_queue.length == _queueSize - 1);    // the queue was full
-        _pushCompleters.removeFirst().complete(0);  // unblock a push
-        _queue.addLast(_pushValues.removeFirst());  // insert the value in the _queue
+        _sendCompleters.removeFirst().complete(0);  // unblock a send
+        _queue.addLast(_sendValues.removeFirst());  // insert the value in the _queue
       }
     }
-    else if (_pushCompleters.isNotEmpty) {        // unblock a push
-      assert(_popCompleters.isEmpty);
-      _pushCompleters.removeFirst().complete(0);
+    else if (_sendCompleters.isNotEmpty) {        // unblock a send
+      assert(_recvCompleters.isEmpty);
+      _sendCompleters.removeFirst().complete(0);
       mf = new GoFuture(null);
-      mf._setValue(_pushValues.removeFirst());
+      mf._setValue(_sendValues.removeFirst());
     }
     else if (!_open) {                        // channel closed: it doesn't block
       mf = new GoFuture(null);
       mf._setValue(channelClosed);
     }
-    else {                                        // this pop is blocking
+    else {                                        // this recv is blocking
       if (doNotBlock)
         return null;
       Completer c = new Completer();
-      _popCompleters.addLast(c);
+      _recvCompleters.addLast(c);
       mf = new GoFuture(c.future);
       _wait(c.future);
     }
@@ -403,42 +403,42 @@ class _NilChannel extends Channel {
   /// Returns the capacity of the queue.
   int get cap => 0;
   
-  int get numBlockedPushes => -1;       // not available
-  int get numBlockedPops => -1;         // not available
+  int get numBlockedSends => -1;        // not available
+  int get numBlockedRecvs => -1;        // not available
   
   bool get isOpen => true;
   bool get isClosed => false;
   
-  /// When a channel is closed no more data can be [push]ed into it and any [pop]
+  /// When a channel is closed no more data can be sent on it and any [recv]
   /// will return [channelClosed].
   void close() { }            // has no effect
 
-  /// Returns true if and only if calling a [push] would block.
-  bool get pushWillBlock => true;
+  /// Returns true if and only if calling [send] would block.
+  bool get sendWillBlock => true;
 
-  /// Returns true if and only if calling a [pop] would block.
-  bool get popWillBlock => true;
+  /// Returns true if and only if calling [recv] would block.
+  bool get recvWillBlock => true;
   
-  /// Returns true if and only if calling a [push] would NOT block.
-  bool get pushReady => false;
+  /// Returns true if and only if calling [send] would NOT block.
+  bool get sendReady => false;
   
-  /// Returns true if and only if calling a [pop] would NOT block.
-  bool get popReady => false;
+  /// Returns true if and only if calling [recv] would NOT block.
+  bool get recvReady => false;
 
-  /// Returns a future which completes when the push becomes non-blocking.
-  Future _getPushFuture() => _c.future;
+  /// Returns a future which completes when [send] becomes non-blocking.
+  Future _getSendFuture() => _c.future;
   
-  /// Returns a future which completes when the pop becomes non-blocking.
-  Future _getPopFuture() => _c.future;
+  /// Returns a future which completes when [recv] becomes non-blocking.
+  Future _getRecvFuture() => _c.future;
 
-  /// Tries to push [newVal] onto this channel and blocks forever, unless
+  /// Tries to send [newVal] on this channel and blocks forever, unless
   /// [doNotBlock] is true, in which case returns false.
-  bool push(newVal, [bool doNotBlock = false]) {
+  bool send(newVal, [bool doNotBlock = false]) {
     if (_selectedOpIdx > 0)
       return false;             // don't execute this op (also see goCase)
       
     if (_gatherChOps)
-      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.push));
+      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.send));
 
     if (doNotBlock)
       return false;
@@ -446,14 +446,14 @@ class _NilChannel extends Channel {
     return true;
   }
 
-  /// Tries to pop the next value from this channel and blocks forever, unless
+  /// Tries to receive the next value from this channel and blocks forever, unless
   /// [doNotBlock] is true, in which case returns null.
-  GoFuture pop([bool doNotBlock = false]) {
+  GoFuture recv([bool doNotBlock = false]) {
     if (_selectedOpIdx > 0)
       return null;              // don't execute this op (also see goCase)
 
     if (_gatherChOps) {
-      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.pop));
+      _singleCaseOps.add(new _ChannelOp(this, _ChannelOp.recv));
       return null;
     }
     

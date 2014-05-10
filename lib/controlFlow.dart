@@ -2,7 +2,7 @@ part of golib;
 
 // These globals are used by goSelect.
 //
-// When _gatherChOps is true, Channel.push and Channel.pop will simply add the
+// When _gatherChOps is true, Channel.send and Channel.recv will simply add the
 // description of their channel operation to the list _selectOps.
 bool _gatherChOps = false;
 List<List> _selectOps;
@@ -52,7 +52,7 @@ void goForever(List<Function> blocks, [List<Function> incBlocks = null]) {
 /// Defines a for-in loop which reads values from a [source]. [source] can be a
 /// channel or a stream. If [source] is a stream, a channel is created and
 /// [source] is attached to it. The for-in loop ends when the channel is closed.
-/// The element popped from [source] at each cycle is referenced by [$f].
+/// The element received from [source] at each cycle is referenced by [$f].
 /// Note: if [source] is a stream, a "return goBreak" inside the goForIn closes
 ///   the channel, otherwise the channel remains open.
 /// 
@@ -87,11 +87,11 @@ void goForIn(source, List<Function> blocks) {
     throw new UsageException("goForIn takes only ROChannels or Streams as source");
 
   // See go() for an explanation of _ToDeref.
-  var _toDeref = new _ToDeref(source.pop());
+  var _toDeref = new _ToDeref(source.recv());
   var start$f = _toDeref;           // initial value of $f in the goWhile
   // here there is an implicit break (as always, before a goWhile).
   _goWhile(() => $f != channelClosed, blocks,
-           [() { $f = _toDeref; _toDeref.goFuture = source.pop(); }], start$f,
+           [() { $f = _toDeref; _toDeref.goFuture = source.recv(); }], start$f,
            closeChannelOnBreak ? source : null);
 }
 
@@ -114,7 +114,7 @@ bool goCase(op1, [op2 = null, op3 = null, op4 = null, op5 = null]) {
   }
 
   // Note:
-  //  _selectedOpIdx is also used in Channel.push and Channel.pop. It prevents the
+  //  _selectedOpIdx is also used in Channel.send and Channel.recv. It prevents the
   // unselected operation from executing (that is, from doing real work).
   if (_selectedOpIdx == 0) {
     _selectedOpIdx = -1;      // disables it
@@ -144,12 +144,12 @@ bool _isOpNonBlocking(op) {
     if (op.isCompleted)
       return true;
   } 
-  else if (op._channel == _ChannelOp.push) {
-    if (op._channel.pushReady)
+  else if (op._channel == _ChannelOp.send) {
+    if (op._channel.sendReady)
       return true;
   }
-  else {          // _ChannelOp.pop
-    if (op._channel.popReady)
+  else {          // _ChannelOp.recv
+    if (op._channel.recvReady)
       return true;
   }
   return false;
@@ -160,29 +160,29 @@ bool _isOpNonBlocking(op) {
 Future _getOpFuture(op) {
   if (op is GoFuture)
     return op.isCompleted ? null : op._f;       // completed => non-blocking
-  else if (op._operation == _ChannelOp.push)
-    return op._channel._getPushFuture();
-  else      // _ChannelOp.pop
-    return op._channel._getPopFuture();
+  else if (op._operation == _ChannelOp.send)
+    return op._channel._getSendFuture();
+  else      // _ChannelOp.recv
+    return op._channel._getRecvFuture();
 }
 
-/// Used in the select to specify on operation of pushing onto [channel]
+/// Used in the select to specify an operation of sending on [channel]
 /// without executing the operation. 
-pushOnto(Channel channel) {
+sendOn(Channel channel) {
   if (!_inSelect)
-    throw new UsageException('You can only use pushOnto in a select!');
+    throw new UsageException('You can only use sendOn in a select!');
   if (_gatherChOps)
-    _singleCaseOps.add(new _ChannelOp(channel, _ChannelOp.push));
+    _singleCaseOps.add(new _ChannelOp(channel, _ChannelOp.send));
   return null;
 }
 
-/// Used in the select to specify on operation of popping from [channel]
+/// Used in the select to specify an operation of receiving from [channel]
 /// without executing the operation. 
-popFrom(Channel channel) {
+recvFrom(Channel channel) {
   if (!_inSelect)
-    throw new UsageException('You can only use popFrom in a select!');
+    throw new UsageException('You can only use recvFrom in a select!');
   if (_gatherChOps)
-    _singleCaseOps.add(new _ChannelOp(channel, _ChannelOp.pop));
+    _singleCaseOps.add(new _ChannelOp(channel, _ChannelOp.recv));
   return null;
 }
 
@@ -195,15 +195,15 @@ popFrom(Channel channel) {
 /// 
 ///     goSelect(() {
 ///       var v;
-///       if (goCase(v = ch1.pop())) goDo([() {
+///       if (goCase(v = ch1.recv())) goDo([() {
 ///         ... 
 ///       }]);
-///       else if (goCase(v = ch1.pop(), future, ch3.push(v))) {
+///       else if (goCase(v = ch1.recv(), future, ch3.send(v))) {
 ///         ...
 ///       }
-///       else if (goCase(v = ch1.pop(), pushOnto(ch4))) {
+///       else if (goCase(v = ch1.recv(), sendOn(ch4))) {
 ///         <some non-blocking computation>
-///         ch4.push(123);              // non-blocking
+///         ch4.send(123);              // non-blocking
 ///         ...
 ///       }
 ///       else if (goDefault()) {
@@ -212,11 +212,11 @@ popFrom(Channel channel) {
 ///     }                     // <---------- remember to put a break here!!!
 ///     
 /// If all the operation of one 'if' are non-blocking, the corresponding branch
-/// is taken. The operations of type 'ch.push(x)' or 'x = ch.pop()' are executed,
+/// is taken. The operations of type 'ch.send(x)' or 'x = ch.recv()' are executed,
 /// from left to right, just before the corresponding branch is taken.
 /// 
 /// If you want to make sure that an operation is non-blocking but you want to
-/// perform that at a later time, you can use 'pushOnto(ch)' and 'popFrom(ch)'
+/// perform that at a later time, you can use 'sendOn(ch)' and 'recvFrom(ch)'
 /// which indicate an operation but don't perform it. You can perform these
 /// operations once inside the branch with only one limitation: if you block
 /// before performing them, they themself could block.
@@ -227,7 +227,7 @@ popFrom(Channel channel) {
 /// If more than one branch can be taken, the select chooses one of them randomly.
 /// The operation of each case must be distinct. For instance, this is prohibited:
 /// 
-///     if (goCase(v = ch1.pop(), popFrom(ch1), pushOnto(ch2)) {
+///     if (goCase(v = ch1.recv(), recvFrom(ch1), sendOn(ch2)) {
 ///       ...
 ///     }
 ///     
@@ -238,8 +238,8 @@ void goSelect(Function selectBlock) {
   List<List> selectOps = [];
   bool defaultPresent;
 
-  // The following line of code tells Channel.push and Channel.pop to just
-  // populate _selectOps and not perform any push or pop.
+  // The following line of code tells Channel.send and Channel.recv to just
+  // populate _selectOps and not perform any send or recv.
   // It also tells goCase to return false so that no branch in the if..else
   // statements is taken in selectBlock.
   _gatherChOps = true;

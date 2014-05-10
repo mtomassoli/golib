@@ -10,7 +10,8 @@ Goroutines represent functions which can be executed concurrently. For instance,
 The mechanism is similar to *multitasking* in operating systems with a single processor and a single core: different tasks seem to be running in parallel even if they aren't.
 The main difference is that multitasking is preemptive, that is the OS decides when a task must be interrupted, whereas goroutines are interrupted only when they surrender control to the system.
 
-Channels are a mean for goroutines to *communicate* and *synchronize*. Channels behave like *queues*, that is you can *push* and *pop* values. Since the operations on channels may block, they can also be used as *high-level* synchronization constructs.
+Channels are a mean for goroutines to *communicate* and *synchronize*.
+You can *send* values on a channel and *receive* values from a channel. Channels behave like *queues*, that is messages are sent/received in FIFO order. Since operations on channels may block, they can also be used as *high-level* synchronization constructs.
 
 ##Why?##
 
@@ -296,7 +297,7 @@ populateChan(Channel<int> ch, int numMessages) {
   go([() {
     int i = 0;
     goWhile(() => i < numMessages, [() {
-      ch.push(i);
+      ch.send(i);
       i++;
     }]);                                              }, () {
     ch.close();
@@ -355,7 +356,7 @@ All done!
 The main function creates a goroutine which:
 1. creates a *WaitGroup* to wait for two workers to end their work
 2. creates a channel
-3. calls *populateChan* which creates a goroutine that pushes messages onto the channel
+3. calls *populateChan* which creates a goroutine that sends messages on the channel
 4. creates two workers which are represented by two goroutines
 5. wait for the workers to finish their work
 6. prints *All done!*
@@ -365,7 +366,7 @@ Each time someone executes `w.done()` the count is decremented by 1.
 
 We've already seen *goForIn*. This time, though, it's used with a channel directly, rather than with a stream.
 
-*populateChan* creates a goroutine which pushes some messages onto *ch* and then closes it.
+*populateChan* creates a goroutine which sends some messages on *ch* and then closes it.
 When a channel is closed, no other data can be sent to it, so all *goForIn* reading from that channel terminate.
 
 ##Is Golib efficient?##
@@ -378,8 +379,8 @@ import 'package:golib/golib.dart';
 f(left, right) {
   var res;
   go([() {
-    res = right.pop();              }, () {
-    left.push(res.value + 1);
+    res = right.recv();             }, () {
+    left.send(res.value + 1);
   }]);
 }
 
@@ -393,10 +394,10 @@ main() {
     f(left, right);
     left = right;
   }
-  go([() { right.push(1); }]);
+  go([() { right.send(1); }]);
   var res;
   go([() {
-    res = leftmost.pop();         }, () {
+    res = leftmost.recv();        }, () {
     print(res.value);
   }]);
 }
@@ -1030,9 +1031,9 @@ After main returns, the three goroutines start running and the third one waits f
 
 ##Channels##
 
-*Channels* are the most complex objects in **Golib**. Think of a Channel as a FIFO *queue*. You can *push* a value onto a channel and *pop* a value from it. These operations can *block*. Here, *blocking* means that a request of *waiting* is sent to the goroutine. The wait is honored only after a break, as always.
+*Channels* are the most complex objects in **Golib**. Think of a Channel as a FIFO *queue*. You can *send* a value on a channel and *recv* (receive) a value from it. These operations can *block*. Here, *blocking* means that a request of *waiting* is sent to the goroutine. The wait is honored only after a break, as always.
 
-Basically, a blocking *push* or *pop* behaves like a *goWait*. Also note that breaks after non-blocking *pushes* and *pops* are ignored. This means that the goroutine goes on executing the next block of code immediately. If you're sure that an operation doesn't block, you don't need any break. If an operation can block, you need a break.
+Basically, a blocking *send* or *recv* behaves like a *goWait*. Also note that breaks after non-blocking *sends* and *recvs* are ignored. This means that the goroutine goes on executing the next block of code immediately. If you're sure that an operation doesn't block, you don't need any break. If an operation can block, you need a break.
 
 You create a channel with
 
@@ -1048,35 +1049,35 @@ Channel([int dim = 0])
 
 where *dim* is the dimension of the channel. A channel has an internal *queue* of length *dim*. If *dim* is *Channel.infinite*, the channel has infinite length.
 
-###push and pop###
+###send and recv###
 
-Here are the signatures of *push* and *pop* operations:
+Here are the signatures of *send* and *recv* operations:
 
 ```dart
-bool push(E newVal, [bool doNotBlock = false])
-GoFuture<E> pop([bool doNotBlock = false])
+bool send(E newVal, [bool doNotBlock = false])
+GoFuture<E> recv([bool doNotBlock = false])
 ```
 
 Both operations may block. An operation blocks when it cannot proceed until something else happens.
 
-Here are the **rules for *push***:
-* If the channel is full (it contains *dim* elements) and there are no *pop* operations pending, *push* blocks.
-* If there are *pop* operations pending, *push* unblocks the oldest pending *pop* operation and returns without blocking.
-* If the channel is *closed*, *push* throws a UsageException (I'll talk about closing channels later).
-* If *push* needs to block and *doNotBlock* is true, it returns false without blocking and doing anything.
+Here are the **rules for *send***:
+* If the channel is full (it contains *dim* elements) and there are no *recv* operations pending, *send* blocks.
+* If there are *recv* operations pending, *send* unblocks the oldest pending *recv* operation and returns without blocking.
+* If the channel is *closed*, *send* throws a UsageException (I'll talk about closing channels later).
+* If *send* needs to block and *doNotBlock* is true, it returns false without blocking and doing anything.
 
-Note that if *dim* is 0 and there are no *pop* pending, *push* always blocks. Channels with *dim* equal to 0 are usually called *unbuffered*.
+Note that if *dim* is 0 and there are no *recv* pending, *send* always blocks. Channels with *dim* equal to 0 are usually called *unbuffered*.
 
-Of course, if you call *push* with *doNotBlock* equal to true, the operation won't block no matter what. If the operation needs to block, it simply fails and returns false.
+Of course, if you call *send* with *doNotBlock* equal to true, the operation won't block no matter what. If the operation needs to block, it simply fails and returns false.
 
-Here are the **rules for *pop***:
-* If the channel is empty (it contains 0 elements) and there are no *push* operations pending, *pop* blocks.
-* If the channel is not empty, *pop* returns the first value on the internal *queue*. If there are *push* operations pending, it means that the *queue* was full. Now that the *queue* has one free spot, the oldest *push* operation is unblocked and its valued added to the *queue*.
-* If the channel is empty but there are *push* operations pending, *pop* unblocks the oldest pending *push* operation and returns its value.
-* If the channel is *closed*, *pop* returns *channelClosed* without blocking.
-* If *pop* needs to block and *doNotblock* is true, it returns null without blocking and doing anything.
+Here are the **rules for *recv***:
+* If the channel is empty (it contains 0 elements) and there are no *send* operations pending, *recv* blocks.
+* If the channel is not empty, *recv* returns the first value on the internal *queue*. If there are *send* operations pending, it means that the *queue* was full. Now that the *queue* has one free spot, the oldest *send* operation is unblocked and its valued added to the *queue*.
+* If the channel is empty but there are *send* operations pending, *recv* unblocks the oldest pending *send* operation and returns its value.
+* If the channel is *closed*, *recv* returns *channelClosed* without blocking.
+* If *recv* needs to block and *doNotblock* is true, it returns null without blocking and doing anything.
 
-*pop* always returns a GoFuture (or null). If *pop* blocks then the returned GoFuture will complete only after a break. If *pop* doesn't block, you can use the GoFuture immediately. Anyway, you can always check whether the GoFuture has completed by reading the property *isCompleted* of the GoFuture.
+*recv* always returns a GoFuture (or null). If *recv* blocks then the returned GoFuture will complete only after a break. If *recv* doesn't block, you can use the GoFuture immediately. Anyway, you can always check whether the GoFuture has completed by reading the property *isCompleted* of the GoFuture.
 
 ###Example###
 
@@ -1089,10 +1090,10 @@ main() {
   {
     go([() {
         print('A1');
-        c.push(1);
-        c.push(2);                      }, () {
+        c.send(1);
+        c.send(2);                      }, () {
         print('A2');
-        c.push(3);                      }, () {
+        c.send(3);                      }, () {
         print('A3');
     }]);
   }
@@ -1102,10 +1103,10 @@ main() {
 
     go([() {
         print('B1');
-        v1 = c.pop();
-        v2 = c.pop();                   }, () {
+        v1 = c.recv();
+        v2 = c.recv();                  }, () {
         print('B2');
-        v3 = c.pop();                   }, () {
+        v3 = c.recv();                  }, () {
         print('B3');
         print(v1.value);
         print(v2.value);
@@ -1136,23 +1137,23 @@ Anyway, this is what happens:
 3. main ends.
 4. The first goroutine starts.
 5. `print('A1')` is executed.
-6. `c.push(1)`: needs to block because *c* is full (*dim* is 0).
-7. `c.push(2)`: needs to block.
+6. `c.send(1)`: needs to block because *c* is full (*dim* is 0).
+7. `c.send(2)`: needs to block.
 8. First break.
-9. The first goroutine starts waiting for the two pushes.
+9. The first goroutine starts waiting for the two send.
 10. The second goroutine starts.
 11. `print('B1')` is executed.
-12. `v1 = c.pop()`: reads *v1*, unblocks the first push and returns without blocking.
-13. `v2 = c.pop()`: reads *v2*, unblocks the second push and returns without blocking.
+12. `v1 = c.recv()`: reads *v1*, unblocks the first send and returns without blocking.
+13. `v2 = c.recv()`: reads *v2*, unblocks the second send and returns without blocking.
 14. Break.
 15. The second goroutine sees that there is nothing to wait for, so goes on executing the next block of code.
 16. `print('B2')` is executed.
-17. `v3 = c.pop()`: needs to block because *c* is empty.
+17. `v3 = c.recv()`: needs to block because *c* is empty.
 18. Break.
-19. The second goroutine starts waiting for the pending pop operation.
+19. The second goroutine starts waiting for the pending recv operation.
 20. The first goroutine resumes execution.
 21. `print('A2')` is executed.
-22. `c.push(3)`: unblocks the pop operation pending and returns without blocking.
+22. `c.send(3)`: unblocks the recv operation pending and returns without blocking.
 23. Break.
 24. The first goroutine sees that there is nothing to wait for, so goes on executing the next block of code.
 25. `print('A3')` is executed.
@@ -1166,8 +1167,8 @@ Anyway, this is what happens:
 
 ###Closing a channel###
 
-A channel can be closed by calling the method *close*. When a channel is closed, no more values can be pushed onto it (if you try, a UsageException is thrown) and any *pop* operation will return *channelClosed*.
-Note that *close* unblocks any pending *pop* operations on the same channel. No *pop* operation can block on a closed channel. It just returns *channelClosed* immediately without blocking (you still need to read the *value* property of the GoFuture).
+A channel can be closed by calling the method *close*. When a channel is closed, no more values can be sent on it (if you try, a UsageException is thrown) and any *recv* operation will return *channelClosed*.
+Note that *close* unblocks any pending *recv* operations on the same channel. No *recv* operation can block on a closed channel. It just returns *channelClosed* immediately without blocking (you still need to read the *value* property of the GoFuture).
 
 ###ROChannel and WOChannel###
 
@@ -1180,9 +1181,9 @@ This is useful when you want that the compiler checks for you that only read (or
 
 ###Streams and channels###
 
-Streams can be attached to a channel. Attached streams push values onto a channel but always without blocking. This means that if a channel is full, values will be lost. There are two solutions to this problem:
+Streams can be attached to a channel. Attached streams send values on a channel but always without blocking. This means that if a channel is full, values will be lost. There are two solutions to this problem:
 1. Create an *infinite* channel.
-2. Pop data frequently so that the channel doesn't fill up.
+2. Recv data frequently so that the channel doesn't fill up.
 
 You can attach streams to channels and detach them by using the following constructors and methods:
 
@@ -1195,7 +1196,7 @@ Creates a channel and attaches all the stream in *streams* to it (see *attach* f
 3. `void attach(Stream stream, {bool detachOnError: false, bool reportErrors: false})`
 Attaches *stream* to the channel.
 If *detachOnError* is true, if and when *stream* sends an error, *stream* is detached from the channel.
-If *reportErrors* is false, the errors sent by *stream* are ignored and not pushed onto the channel. Errors are wrapped in the object *StreamError* so that you can spot them.
+If *reportErrors* is false, the errors sent by *stream* are ignored and not sent on the channel. Errors are wrapped in the object *StreamError* so that you can spot them.
 
 4. `void attachAll(List<Stream> streams, {bool detachOnError: false, bool reportErrors: false})`
 Attaches all the streams in *streams* to the channel (see *attach* for the parameters).
@@ -1297,15 +1298,15 @@ Here's the general syntax:
 ```dart
 goSelect(() {
   var v;
-  if (goCase(v = ch1.pop())) goDo([() {
+  if (goCase(v = ch1.recv())) goDo([() {
     ... 
   }]);
-  else if (goCase(v = ch1.pop(), future, ch3.push(v))) {
+  else if (goCase(v = ch1.recv(), future, ch3.send(v))) {
     ...
   }
-  else if (goCase(v = ch1.pop(), pushOnto(ch4))) {
+  else if (goCase(v = ch1.recv(), sendOn(ch4))) {
     <some non-blocking computation>
-    ch4.push(123);              // non-blocking
+    ch4.send(123);              // non-blocking
     ...
   }
   else if (goDefault()) {
@@ -1332,13 +1333,13 @@ Note that:
 * *goDefault* is optional.
 * You can specify both *futures* (instances of GoFuture) and channel operations.
 * You can specify multiple operations in a single *goCase*.
-* Operations of the form `v = ch1.pop()` and `ch3.push(v)`, are executed right before the corresponding branch is taken (when both are non-blocking, of course).
-* Operations of the form `pushOnto(ch)` and `popFrom(ch)` are indicated but not executed. If the corresponding branch is taken, they can be used (once) without blocking. If, however, you put a break before you use them, all bets are off (that is, they *can* block).
-Look at the example above: a push is indicated through `pushOnto(ch4)` and it's executed in the code of the corresponding branch (`ch4.push(123)`).
-On the contrary, `v = ch1.pop()` is executed right before the code in the corresponding branch is executed.
-* Operations in a single *goCase* are executed from left to right. For instance, in `goCase(v = ch1.pop(), future, ch3.push(v))`, *v* is popped from *ch1* and pushed onto *ch3*.
-* A *goCase* can't have repeated operations or GoFuture (note that `pushOnto(ch4)` and `ch4.push(1)` are the same operation!).
-* A branch is taken when all its operations are non-blocking and all its GoFuture are completed. The operations are considered individually, that is, `ch1.push(1)` and `ch1.pop()` will still block even if *together* they would proceed because one would unblock the other.
+* Operations of the form `v = ch1.recv()` and `ch3.send(v)`, are executed right before the corresponding branch is taken (when both are non-blocking, of course).
+* Operations of the form `sendOn(ch)` and `recvFrom(ch)` are indicated but not executed. If the corresponding branch is taken, they can be used (once) without blocking. If, however, you put a break before you use them, all bets are off (that is, they *can* block).
+Look at the example above: a send is indicated through `sendOn(ch4)` and it's executed in the code of the corresponding branch (`ch4.send(123)`).
+On the contrary, `v = ch1.recv()` is executed right before the code in the corresponding branch is executed.
+* Operations in a single *goCase* are executed from left to right. For instance, in `goCase(v = ch1.recv(), future, ch3.send(v))`, *v* is received from *ch1* and sent on *ch3*.
+* A *goCase* can't have repeated operations or GoFuture (note that `sendOn(ch4)` and `ch4.send(1)` are the same operation!).
+* A branch is taken when all its operations are non-blocking and all its GoFuture are completed. The operations are considered individually, that is, `ch1.send(1)` and `ch1.recv()` will still block even if *together* they would proceed because one would unblock the other.
 
 ###Example 1###
 
@@ -1354,11 +1355,11 @@ main() {
     goWhile(() => i++ < 2, [() {
       goSelect(() {
         var x;
-        if (goCase(x = ch1.pop())) {
+        if (goCase(x = ch1.recv())) {
           ch1 = nil;
           print('ch1 is now nil');
         }
-        else if (goCase(x = ch2.pop())) {
+        else if (goCase(x = ch2.recv())) {
           ch2 = nil;
           print('ch2 is now nil');
         }
@@ -1384,9 +1385,9 @@ ch2 is now nil
 The wait is over!
 ```
 
-Initially, *goSelect* blocks because both `x = ch1.pop()` and `x = ch2.pop()` are blocking and there is no default case.
+Initially, *goSelect* blocks because both `x = ch1.recv()` and `x = ch2.recv()` are blocking and there is no default case.
 When, after a pause of 1 second, *ch1* is closed, the first branch of *goSelect* is taken, `ch1 = nil` is executed and "ch1 is now nil" is printed.
-Since any operation on *nil* blocks, the first branch is virtually removed from *goSelect*. If we removed `ch1 = nil`, on the next iteration the first branch would be immediately taken because a pop on a closed channel never blocks (it reads the value *channelClosed*).
+Since any operation on *nil* blocks, the first branch is virtually removed from *goSelect*. If we removed `ch1 = nil`, on the next iteration the first branch would be immediately taken because a recv on a closed channel never blocks (it reads the value *channelClosed*).
 
 ###Example 2###
 
@@ -1441,19 +1442,19 @@ main() {
     goWhile(() => ch1 != nil || ch2 != nil || ch3 != nil, [() {
       goSelect(() {
         var v;
-        if (goCase(v = ch1.pop())) {
+        if (goCase(v = ch1.recv())) {
           if (v.value != channelClosed)
             print('ch1: ${v.value}');
           else
             ch1 = nil;
         }
-        else if (goCase(v = ch2.pop())) {
+        else if (goCase(v = ch2.recv())) {
           if (v.value != channelClosed)
             print('ch2: ${v.value}');
           else
             ch2 = nil;
         }
-        else if (goCase(v = ch3.pop())) {
+        else if (goCase(v = ch3.recv())) {
           if (v.value != channelClosed)
             print('ch3: ${v.value}');
           else
@@ -1469,7 +1470,7 @@ main() {
 This example is more involved. As you can see, three streams are attached to three channels and a *goSelect* is used to read from them.
 Here are the key points:
 * The loop ends only when *ch1*, *ch2* and *ch3* are all *nil*.
-* When a `v = chX.pop()` is non-blocking, the operation is performed and the code in the corresponding branch:
+* When a `v = chX.recv()` is non-blocking, the operation is performed and the code in the corresponding branch:
   * prints a message if *chX* is not closed or
   * executes `chX = nil` if *chX* is closed.
 

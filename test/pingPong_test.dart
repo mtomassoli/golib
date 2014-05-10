@@ -42,13 +42,13 @@ void player(String name, Channel<Ball> table) {
   var ball;
   go([() {
     goForever([() {
-      ball = table.pop();                     }, () {
+      ball = table.recv();                    }, () {
       if (ball.value == channelClosed)
         return goExit;
       ball.value.hits++;
       log('$name ${ball.value.hits}');
       goSleep(100);                           }, () {
-      table.push(ball.value);
+      table.send(ball.value);
     }]);
   }]);
 }
@@ -59,9 +59,9 @@ pingPongTest() {
     player('ping', table);
     player('pong', table);
     
-    table.push(new Ball());
+    table.send(new Ball());
     goSleep(1000);                            }, () {
-    table.pop();                              }, () {
+    table.recv();                             }, () {
     table.close();
   }]);
 }

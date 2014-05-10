@@ -124,19 +124,19 @@ streamsTest3() {
     goWhile(() => ch1 != nil || ch2 != nil || ch3 != nil, [() {
       goSelect(() {
         var v;
-        if (goCase(v = ch1.pop())) {
+        if (goCase(v = ch1.recv())) {
           if (v.value != channelClosed)
             log('ch1: ${v.value}');
           else
             ch1 = nil;
         }
-        else if (goCase(v = ch2.pop())) {
+        else if (goCase(v = ch2.recv())) {
           if (v.value != channelClosed)
             log('ch2: ${v.value}');
           else
             ch2 = nil;
         }
-        else if (goCase(v = ch3.pop())) {
+        else if (goCase(v = ch3.recv())) {
           if (v.value != channelClosed)
             log('ch3: ${v.value}');
           else

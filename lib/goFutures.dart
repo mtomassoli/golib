@@ -20,7 +20,7 @@ Future _orFutures(List<Future> fs) {
   // This is a little optimization. Since the future of the channel nil never
   // completes, we ignore it. We must also make sure that there are other
   // futures, though.
-  var new_fs = fs.where((f) => f != nil._getPopFuture()).toList();
+  var new_fs = fs.where((f) => f != nil._getRecvFuture()).toList();
   if (new_fs.isNotEmpty)
     fs = new_fs;
   

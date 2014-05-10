@@ -34,8 +34,8 @@ func main() {
 f(left, right) {
   var res;
   go([() {
-    res = right.pop();              }, () {
-    left.push(res.value + 1);
+    res = right.recv();             }, () {
+    left.send(res.value + 1);
   }]);
 }
 
@@ -49,10 +49,10 @@ daisyChainTest() {
     f(left, right);
     left = right;
   }
-  go([() { right.push(1); }]);
+  go([() { right.send(1); }]);
   var res;
   go([() {
-    res = leftmost.pop();         }, () {
+    res = leftmost.recv();        }, () {
     log(res.value);
   }]);
 }
